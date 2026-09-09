@@ -359,7 +359,11 @@ stage_deps() {
                 for c in \
                     "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" \
                     "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine"; do
-                    if [ -x "$c" ]; then export PATH="$(dirname "$c"):$PATH"; break; fi
+                    if [ -x "$c" ]; then
+                        _wdir="$(dirname "$c")"
+                        export PATH="$_wdir:$PATH"
+                        break
+                    fi
                 done
                 command -v wine >/dev/null 2>&1 || die "wine not found — install CrossOver or wine-stable via brew"
             fi ;;
@@ -676,9 +680,12 @@ if [ -n "$STAGE_FAILS" ]; then
 fi
 printf '\n'
 printf '  Prefix    : %s\n' "$WINEPREFIX"
-printf '  Launcher  : %s\n' \
-    "$( [ "$PLATFORM" = macos ] && printf '~/Applications/SSMS 20 (Wine).command' \
-        || printf '%s' '~/.local/share/applications/ssms-on-wine.desktop' )"
+if [ "$PLATFORM" = "macos" ]; then
+    _launcher_path="$HOME/Applications/SSMS 20 (Wine).command"
+else
+    _launcher_path="$HOME/.local/share/applications/ssms-on-wine.desktop"
+fi
+printf '  Launcher  : %s\n' "$_launcher_path"
 printf '\n'
 printf '  Kerberos? Get a ticket on the host BEFORE launching SSMS:\n'
 printf '      kinit your.username@YOURREALM.EXAMPLE.COM\n'

@@ -32,13 +32,13 @@ static class Program
         {
             return cmd switch
             {
-                "locate"      => Locate(args),
-                "patch-gifs"  => PatchGifs(args),
-                "patch-nav"   => PatchNav(args),
-                "restore"     => Restore(args),
-                "verify"      => Verify(args),
+                "locate" => Locate(args),
+                "patch-gifs" => PatchGifs(args),
+                "patch-nav" => PatchNav(args),
+                "restore" => Restore(args),
+                "verify" => Verify(args),
                 "reset-cache" => ResetCache(args),
-                "parse-log"   => ParseLog(args),
+                "parse-log" => ParseLog(args),
                 _ => Unknown(cmd),
             };
         }

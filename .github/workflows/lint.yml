@@ -48,7 +48,11 @@ jobs:
           bad=0
           for f in $files; do
             [ -f "$f" ] || continue
-            if grep -nE '(declare -A|mapfile|readarray|\$\{[a-zA-Z_][a-zA-Z_0-9]*,,\}|local -a )' "$f"; then
+            # Strip line comments before matching so the ban-list itself
+            # (e.g. a comment saying "no `declare -A`") does not trip.
+            if sed 's/#.*$//' "$f" \
+                | grep -nE '(declare -A|mapfile|readarray|\$\{[a-zA-Z_][a-zA-Z_0-9]*,,\}|local -a )' \
+                | grep .; then
               echo "bash4+ construct found in $f"
               bad=1
             fi
