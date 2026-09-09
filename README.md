@@ -1,183 +1,280 @@
-# SSMS 20 on Wine — install package
+# SSMS 20 on Wine — installer + patcher
 
-This is an installer bundle for running **SQL Server Management Studio 20.2.1**
-on Linux via Wine. It automates everything needed to go from a blank Wine
-prefix to a working SSMS with Object Explorer, Query Editor, and Windows
-Authentication via Kerberos.
+[![lint](https://github.com/Ik4rCat/ssms-on-wine_F/actions/workflows/lint.yml/badge.svg)](https://github.com/Ik4rCat/ssms-on-wine_F/actions/workflows/lint.yml)
+[![build](https://github.com/Ik4rCat/ssms-on-wine_F/actions/workflows/build.yml/badge.svg)](https://github.com/Ik4rCat/ssms-on-wine_F/actions/workflows/build.yml)
 
-Tested against: Ubuntu 24.04 + wine-stable 11.0 + SQL Server 2022 (16.0).
+Installer + binary patcher that gets **SQL Server Management Studio 20.2.1**
+running under Wine on Linux and (best-effort) macOS. Automates the wine
+prefix setup, the SSMS installer, the .NET redirects, the GIF→PNG patch,
+the NavigationService patch, and the launcher.
 
-## What you need first
+**Fork status.** This is a fork of [`WilhelmZA/ssms-on-wine`](https://github.com/WilhelmZA/ssms-on-wine).
+Upstream targeted Ubuntu 24.04 + wine-stable 11.0 + an early SSMS 20 build;
+this fork addresses breakage on Arch, macOS, and later SSMS 20.x layouts
+(20.2.1 moved Explorer.dll into `Extensions/Application/`).
 
-1. **Wine 11.0 or newer** from the official WineHQ repo
-   (the Ubuntu-shipped `wine` package is too old):
-   ```
-   sudo apt install wine-stable winetricks unzip
-   ```
-   On Ubuntu 24.04, first add WineHQ's Noble repo — see
-   <https://wiki.winehq.org/Ubuntu>.
+## Compatibility matrix
 
-2. **`SSMS-Setup-ENU.exe`** — download from Microsoft:
-   <https://learn.microsoft.com/en-us/sql/ssms/download-sql-server-management-studio-ssms>
-   (We cannot redistribute this. Download it once and keep it around.)
+| SSMS build       | Ubuntu 24.04 + wine 11 | Arch + wine 11 | macOS (CrossOver / wine-stable) |
+| ---------------- | ---------------------- | -------------- | ------------------------------- |
+| 20.0.x (flat)    | ✅ tested (upstream)    | ✅ tested       | 🟡 unverified                    |
+| **20.2.1**       | ✅ tested               | ✅ tested       | 🟡 Apple Silicon: needs CrossOver; Intel: unverified |
+| 21.x, 22.x       | ❌ VS Installer bootstrapper won't run under Wine |
 
-3. **Kerberos configured on the Linux host** if you need Windows
-   Authentication. Typically: join the domain (SSSD/realmd) or configure
-   `/etc/krb5.conf` with your realm. You need `kinit` to work on the host
-   — Wine will pick up the ticket cache automatically via its SSPI stack.
+## Quickstart
 
-## Install
+```sh
+# 1. Grab an SSMS-Setup-ENU.exe — MS EULA forbids redistribution, so this
+#    script cannot download it. Running the installer without an argument
+#    prints the download URL and opens it in your default browser:
+./setup-ssms.sh
 
-Clone or download this repo:
-```
-git clone https://github.com/WilhelmZA/ssms-on-wine.git
-cd ssms-on-wine
-```
-
-Then run the installer, pointing it at your downloaded SSMS installer:
-```
+# 2. Then rerun pointing at the downloaded file:
 ./setup-ssms.sh /path/to/SSMS-Setup-ENU.exe
+
+# 3. Optional: use a custom prefix
+./setup-ssms.sh /path/to/SSMS-Setup-ENU.exe /custom/prefix
 ```
 
-By default this creates a Wine prefix at `~/.wine-ssms`. To use a different
-location:
+Runs 10–15 minutes end-to-end. Most of it is `.NET 4.8` via winetricks
+and the Microsoft SSMS installer; the binary patches are fast.
 
+The MS installer URL used by the browser opener is:
+`https://go.microsoft.com/fwlink/?linkid=2313753&clcid=0x409` — that's
+the last SSMS release (20.2.1) that ships as a standalone MSI-style EXE.
+
+### Non-fatal stages
+
+Patch stages (`patch_gifs`, `patch_nav`, `reset_cache`) never abort the
+install. Failures are logged, the launcher is still created, and a
+per-stage summary prints at the end. Re-run individual stages with:
+
+```sh
+./setup-ssms.sh --only patch_gifs /path/to/SSMS-Setup-ENU.exe
+./setup-ssms.sh --only patch_nav  /path/to/SSMS-Setup-ENU.exe
+./setup-ssms.sh --resume          /path/to/SSMS-Setup-ENU.exe
 ```
-./setup-ssms.sh /path/to/SSMS-Setup-ENU.exe /custom/prefix/path
+
+`--resume` skips stages already recorded in `$WINEPREFIX/.ssms-setup.state`.
+
+### Diagnostics
+
+```sh
+./setup-ssms.sh doctor                # host / prefix / patcher health checklist
+./setup-ssms.sh reset-cache           # wipe ComponentModelCache
+./bin/ssms-patcher locate <IDE_DIR>   # print SSMS version + resolved layout
+./bin/ssms-patcher verify <IDE_DIR>   # list which DLLs are currently patched
 ```
 
-The script takes 10-15 minutes to run. Most of the time is the .NET 4.8
-install and the MS SSMS installer. The patching steps are fast.
+## Prerequisites by platform
 
-The `ssms-patcher` binary is auto-downloaded from the GitHub Release on
-first run. If you'd rather build it yourself (e.g. for transparency):
+### Ubuntu 24.04
+
+```sh
+# WineHQ noble repo (see https://wiki.winehq.org/Ubuntu), then:
+sudo apt install wine-stable winetricks unzip curl python3
 ```
-# requires dotnet-sdk-10 or newer
-make build
+
+### Arch Linux
+
+`[multilib]` **must be enabled** in `/etc/pacman.conf` — SSMS 20 is a 32-bit
+PE32 executable; without multilib wine can't run it. The `deps` stage of
+`setup-ssms.sh` refuses to continue if multilib is off.
+
+```sh
+sudo pacman -S wine wine-mono wine-gecko winetricks unzip curl python
+# lib32-unixodbc is recommended (SSMS uses ANSI ODBC entry points)
+sudo pacman -S lib32-unixodbc
+# on NVIDIA hosts:
+sudo pacman -S lib32-nvidia-utils
 ```
 
-## Run
+### macOS
 
-1. Get a Kerberos ticket on the **host** (not inside Wine):
-   ```
-   kinit your.username@YOURREALM.LOCAL
-   klist     # verify you have a ticket
-   ```
-2. Launch SSMS from your app menu ("SQL Server Management Studio 20 (Wine)"),
-   or manually:
-   ```
-   WINEPREFIX=~/.wine-ssms wine \
-     "C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe"
-   ```
-3. Connect Dialog → Windows Authentication → enter your server name.
+- **Homebrew** for the tooling: `brew install --cask wine-stable && brew install winetricks python3`.
+- **Apple Silicon**: stock wine-stable can't run 32-bit x86 code reliably.
+  The realistic option is CrossOver (which bundles Wine 11 + Rosetta/GPTK
+  translation). The script searches for wine at
+  `/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine`
+  before falling back to Homebrew's cask.
+- Launcher is written to `~/Applications/SSMS 20 (Wine).command` (double-clickable).
 
-## What gets installed
+## Kerberos
 
-Into the Wine prefix:
+Windows Authentication uses the ticket cache your **host** owns —
+Wine's SSPI stack picks it up automatically. Before launching SSMS:
 
-- .NET Framework 4.8 (via `winetricks dotnet48`)
-- VC++ 2022 runtimes
-- MS gdiplus + windowscodecs (natively, though see note below)
-- CoreFonts, D3DX9, DXVK, MSXML6
-- SSMS 20.2.1 itself (via the Microsoft bundled installer)
-- 7 bundled .NET dependency DLLs that SSMS needs but doesn't ship correctly
-  (`System.Text.Json`, `Microsoft.Bcl.AsyncInterfaces`, `System.Text.Encodings.Web`,
-  `System.Memory`, and 3 `System.Security.*`)
+```sh
+kinit your.username@YOURREALM.EXAMPLE.COM
+klist    # verify
+```
 
-Binary patches applied to the installed SSMS:
+No MIT Kerberos install is needed inside the prefix.
 
-- **GIF → PNG resource swap** in ~35 SSMS DLLs. Wine 11's GIF decoder is
-  broken (filed upstream); replacing the embedded GIF resources with PNG
-  bytes of the same image makes every SSMS dialog that loads icons work.
-  Originals backed up as `*.orig-gif`.
+## What actually happens under the hood
 
+Prefix setup (via winetricks):
+
+- `remove_mono` → then `dotnet48` (must go before the SSMS installer)
+- `win10`, `vcrun2022`, `gdiplus`, `windowscodecs`, `corefonts`
+- `d3dcompiler_43`, `d3dcompiler_47`, `d3dx9`, `msxml6`
+
+The `prefix` stage is idempotent — subsequent runs check for a native
+`mscoreei.dll` and skip the slow `dotnet48` re-install.
+
+Bundled `.NET` DLLs dropped into `IDE/` (SSMS asks for these but doesn't
+ship them):
+`System.Text.Json`, `Microsoft.Bcl.AsyncInterfaces`, `System.Text.Encodings.Web`,
+`System.Memory`, `System.Security.AccessControl`, `System.IO.FileSystem.AccessControl`,
+`System.Security.Principal.Windows`.
+
+Binding redirects injected into both `Ssms.exe.config` files (IDE + AppData).
+
+Binary patches (all reversible; backups sit next to the originals):
+
+- **GIF → PNG resource swap** across DLLs under `Common7/IDE/`. Wine 11's
+  GIF decoder is broken; PNG payloads with the same byte length work
+  around it. Backups: `*.orig-gif`. By default DLLs that live next to a
+  `.pkgdef` (VS package assemblies) are **skipped** because Cecil-rewriting
+  invalidates the strong-name hash VS Shell caches — see problem #2
+  in `claude_task.md`. Use `--force-strong` if you know what you're
+  doing.
 - **NavigationService no-op** in
-  `Microsoft.SqlServer.Management.SqlStudio.Explorer.dll`. Works around a
-  VS Shell service-container issue under Wine that otherwise leaves the
-  Object Explorer tree empty. Original backed up as `*.preinject`.
+  `Microsoft.SqlServer.Management.SqlStudio.Explorer.dll`. The patcher
+  finds this DLL under `Extensions/Application/` (20.2.1) or at the
+  IDE root (older 20.x). Backup: `*.preinject`.
 
-- **Assembly binding redirects** in both `Ssms.exe.config` files (the
-  one in the IDE folder and the auto-generated one in AppData).
+Post-patch, `ComponentModelCache` is wiped so VS Shell rebuilds its MEF
+graph from the patched DLLs instead of the cached "broken" state.
+
+## Acceptance checklist (what to smoke-test after install)
+
+Run through this after launching SSMS to confirm the install is really
+working, not merely opening the window:
+
+- [ ] Connect dialog opens; Windows Authentication → server → connect succeeds
+- [ ] Object Explorer expands `Databases` → user DBs, `Security`, `Server Objects`
+- [ ] Expanding a database issues real SMO queries (visible in server-side traces)
+- [ ] Right-click a table → `Properties` opens the properties dialog
+- [ ] `New Query` opens a query editor tab; F5 executes; result grid shows rows
+- [ ] `View → Output → Object Explorer` shows no red-flag exceptions
+- [ ] Table Designer opens on an existing table
+
+## What does not work
+
+- **Azure connections** of any kind (SQL Database, Managed Instance,
+  Synapse, Fabric) — untested / expected to fail.
+- **SSIS / SSAS / SSRS designers** — some rely on unpatched GIFs in
+  Report Viewer / Mashup client DLLs.
+- **Always On / HADR** dialogs.
+- **Database Engine Tuning Advisor** (separate tool in the bundle).
+- **Activity Monitor** with performance counters (Wine perf hooks miss).
+- **SSMS 21 / 22** — those ship as VS Installer bootstrappers
+  (`vs_SSMS.exe`) which Wine cannot execute.
+
+See `APPDB-ENTRY.txt` for the full write-up.
 
 ## Troubleshooting
 
-**Object Explorer shows no databases.**
-Verify the patch is in place:
-```
-~/apps/wine/SQL-SSMS/bin/ssms-patcher verify \
-  ~/.wine-ssms/drive_c/Program\ Files\ \(x86\)/Microsoft\ SQL\ Server\ Management\ Studio\ 20/Common7/IDE
-```
-You should see non-zero "Nav-patched DLLs".
-
-**Dialogs throw "Parameter is not valid. (System.Drawing)".**
-A GIF somewhere wasn't patched. Re-run:
-```
-~/apps/wine/SQL-SSMS/bin/ssms-patcher patch-gifs <IDE_DIR>
+**Object Explorer shows only "System Databases" and "Database Snapshots".**
+The NavigationService patch didn't apply. Check:
+```sh
+./bin/ssms-patcher locate  "$IDE_DIR"   # is Explorer.dll where we expected?
+./bin/ssms-patcher verify  "$IDE_DIR"   # any *.preinject backups?
+./setup-ssms.sh --only patch_nav /path/to/SSMS-Setup-ENU.exe
 ```
 
-**Kerberos "Login failed" / SSPI error.**
-Check `klist` on the host — if empty, run `kinit`. If the service principal
-`MSSQLSvc/<server>:<port>@REALM` is missing from the ticket, your Kerberos
-config on the host is incomplete (ask your AD admin).
+**Dialogs throw `Parameter is not valid. (System.Drawing)`.**
+A GIF wasn't patched. Re-run:
+```sh
+./setup-ssms.sh --only patch_gifs /path/to/SSMS-Setup-ENU.exe
+```
 
-**See the actual error SSMS hit.**
-Inside SSMS: `View → Output`, then pick "Object Explorer" in the dropdown.
-SSMS's own catch blocks log here (we've enabled this by default).
+**A "package did not load correctly" error mentioning `SqlStudioExplorer`.**
+This is the strong-name / package-hash cache problem — a re-patch after
+wiping `ComponentModelCache` usually fixes it:
+```sh
+./setup-ssms.sh reset-cache
+```
+
+**Object Explorer errors are hidden.**
+`View → Output → Object Explorer` in SSMS exposes the caught-and-swallowed
+exceptions.
+
+**Deeper diagnostics.** SSMS writes a VS ActivityLog at
+`$WINEPREFIX/drive_c/users/<you>/AppData/Roaming/Microsoft/AppEnv/15.0/ActivityLog.xml`
+(UTF-16 LE). The patcher parses it and prints only failures:
+```sh
+./bin/ssms-patcher parse-log \
+  "$WINEPREFIX/drive_c/users/$USER/AppData/Roaming/Microsoft/AppEnv/15.0/ActivityLog.xml"
+```
 
 **Revert everything.**
+```sh
+./bin/ssms-patcher restore "$IDE_DIR"
 ```
-~/apps/wine/SQL-SSMS/bin/ssms-patcher restore <IDE_DIR>
+Restore a single file:
+```sh
+./bin/ssms-patcher restore "$IDE_DIR" --file \
+  "$IDE_DIR/Extensions/Application/Microsoft.SqlServer.Management.SqlStudio.Explorer.dll"
 ```
-
-## What works and what doesn't
-
-See `APPDB-ENTRY.txt` next to this README (the WineHQ AppDB write-up) for
-the full list. Short version:
-
-✅ Works: connect, Object Explorer tree, Query Editor, Server Properties,
-  Database Mail, most menus and dialogs
-❌ Doesn't work: Azure connection types, SSAS/SSRS/SSIS designers,
-  Always On dialogs, Database Engine Tuning Advisor (mostly untested —
-  see AppDB entry)
 
 ## Uninstall
 
-```
-~/apps/wine/SQL-SSMS/bin/ssms-patcher restore <IDE_DIR>
+```sh
+./bin/ssms-patcher restore "$IDE_DIR"
 rm -rf ~/.wine-ssms
-rm ~/.local/share/applications/ssms-on-wine.desktop
+rm -f  ~/.local/share/applications/ssms-on-wine.desktop
+rm -f  "$HOME/Applications/SSMS 20 (Wine).command"   # macOS
 ```
 
-## Layout of this package
+## Layout
 
 ```
-SQL-SSMS/
-├── README.md                    this file
-├── setup-ssms.sh                main installer script
-├── APPDB-ENTRY.txt              WineHQ AppDB compatibility writeup
-├── bin/
-│   └── ssms-patcher             self-contained Linux x86_64 ELF binary
-│                                (Mono.Cecil + ImageSharp, ~73 MB)
-├── dlls/                        .NET DLLs SSMS needs, bundled
-│   ├── System.Text.Json.dll
-│   ├── System.Memory.dll
-│   └── ...
-└── src/                         source of the patcher
-    ├── Program.cs
-    └── ssms-patcher.csproj
+.
+├── setup-ssms.sh              main installer (all platforms)
+├── Makefile                   build targets for the patcher
+├── src/                       C# sources for ssms-patcher
+│   ├── Program.cs             CLI dispatcher
+│   ├── PathResolver.cs        recursive locate + version detect
+│   ├── GifPatcher.cs          patch-gifs + skip-heuristics
+│   ├── NavPatcher.cs          patch-nav
+│   ├── CacheReset.cs          reset-cache
+│   └── ActivityLog.cs         parse-log
+├── dlls/                      bundled .NET dependency DLLs
+├── tests/                     synthetic fixtures + smoke tests
+│   ├── run.sh                 exercises the CLI contract end-to-end
+│   └── testasm/               tiny .NET library with a real embedded GIF
+├── .github/workflows/         lint / build / release
+└── APPDB-ENTRY.txt            WineHQ AppDB write-up (root-cause detail)
 ```
 
-## Issues
+## Building the patcher yourself
 
-Open an issue at
-<https://github.com/WilhelmZA/ssms-on-wine/issues> if you hit something
-the troubleshooting section doesn't cover. Include your wine version
-(`wine --version`), Ubuntu version (`lsb_release -ds`), and the SSMS
-Output Window → Object Explorer pane contents if it's an OE problem.
+```sh
+# Requires the .NET 10 SDK.
+make build                    # host RID
+make build-linux              # explicit linux-x64
+make build-osx-x64
+make build-osx-arm64
+```
+
+The build embeds the .NET 10 runtime; the resulting binary is ~75 MB
+self-contained.
+
+## Contributing / issues
+
+Report at <https://github.com/Ik4rCat/ssms-on-wine_F/issues>.
+Please include:
+
+- `wine --version`
+- `./setup-ssms.sh doctor` output
+- `./bin/ssms-patcher locate "$IDE_DIR"` output
+- The SSMS `View → Output → Object Explorer` pane if it's an OE issue
+- `./bin/ssms-patcher parse-log <ActivityLog.xml>` if it's a package-load issue
 
 ## License
 
-The patcher code in `src/` is MIT. The bundled .NET DLLs in `dlls/` are
-redistributable per their respective MS licenses (all are open-source
-.NET Foundation packages from NuGet). You must provide your own
-`SSMS-Setup-ENU.exe`; SSMS itself is governed by Microsoft's EULA.
+Patcher code (`src/`, `tests/`) is MIT. Bundled `.NET` DLLs in `dlls/` are
+redistributable per the .NET Foundation / MS license. SSMS itself is
+governed by Microsoft's EULA — you provide your own `SSMS-Setup-ENU.exe`.

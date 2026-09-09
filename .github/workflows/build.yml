@@ -1,0 +1,69 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: osx-x64
+            os: macos-latest
+          - rid: osx-arm64
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    name: build ${{ matrix.rid }}
+    env:
+      MSBuildEnableWorkloadResolver: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: publish ${{ matrix.rid }}
+        working-directory: src
+        run: |
+          dotnet publish -c Release -r ${{ matrix.rid }} --self-contained -o "../bin"
+          rm -f ../bin/*.pdb ../bin/ssms-patcher.dll
+
+      - name: smoke — --help returns 0
+        run: |
+          chmod +x ./bin/ssms-patcher
+          ./bin/ssms-patcher --help
+
+      - name: rename artefact
+        run: mv ./bin/ssms-patcher ./bin/ssms-patcher-${{ matrix.rid }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssms-patcher-${{ matrix.rid }}
+          path: bin/ssms-patcher-${{ matrix.rid }}
+
+  smoke-fixtures:
+    name: smoke — patcher against synthetic fixtures
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      MSBuildEnableWorkloadResolver: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: download patcher
+        uses: actions/download-artifact@v4
+        with:
+          name: ssms-patcher-linux-x64
+          path: bin
+      - name: chmod
+        run: chmod +x bin/ssms-patcher-linux-x64 && ln -sf ssms-patcher-linux-x64 bin/ssms-patcher
+      - name: run smoke tests
+        run: bash tests/run.sh

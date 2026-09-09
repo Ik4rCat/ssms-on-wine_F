@@ -1,0 +1,70 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shell:
+    name: shellcheck + bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n on all *.sh
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(find . -type f -name '*.sh' -not -path './bin/*' -not -path './src/bin/*' -print0)
+          exit "$fail"
+
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck -S warning
+        run: |
+          set -euo pipefail
+          find . -type f -name '*.sh' -not -path './bin/*' -not -path './src/bin/*' -print0 \
+            | xargs -0 shellcheck -S warning
+
+  bash32-compat:
+    name: bash 3.2 compatibility (macOS-facing scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # setup-ssms.sh and ssms-bootstrap.sh are executed on macOS bash 3.2.
+      # We forbid bash4+ constructs (associative arrays, ${x,,}, mapfile,
+      # readarray, `local -a`) in those two files specifically.
+      - name: forbid bash4+ constructs in macOS-facing scripts
+        run: |
+          set -euo pipefail
+          files='setup-ssms.sh ssms-bootstrap.sh'
+          bad=0
+          for f in $files; do
+            [ -f "$f" ] || continue
+            if grep -nE '(declare -A|mapfile|readarray|\$\{[a-zA-Z_][a-zA-Z_0-9]*,,\}|local -a )' "$f"; then
+              echo "bash4+ construct found in $f"
+              bad=1
+            fi
+          done
+          exit "$bad"
+
+  dotnet-format:
+    name: dotnet format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: dotnet format --verify-no-changes
+        working-directory: src
+        env:
+          MSBuildEnableWorkloadResolver: 'false'
+        run: dotnet format --verify-no-changes --severity warn

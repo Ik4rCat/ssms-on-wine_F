@@ -1,0 +1,93 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: osx-x64
+            os: macos-latest
+          - rid: osx-arm64
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    name: build ${{ matrix.rid }}
+    env:
+      MSBuildEnableWorkloadResolver: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: publish
+        working-directory: src
+        run: |
+          dotnet publish -c Release -r ${{ matrix.rid }} --self-contained -o "../bin"
+          rm -f ../bin/*.pdb ../bin/ssms-patcher.dll
+          mv ../bin/ssms-patcher ../bin/ssms-patcher-${{ matrix.rid }}
+      - name: sha256
+        run: |
+          if command -v sha256sum >/dev/null; then
+            sha256sum bin/ssms-patcher-${{ matrix.rid }} > bin/ssms-patcher-${{ matrix.rid }}.sha256
+          else
+            shasum -a 256 bin/ssms-patcher-${{ matrix.rid }} > bin/ssms-patcher-${{ matrix.rid }}.sha256
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssms-patcher-${{ matrix.rid }}
+          path: |
+            bin/ssms-patcher-${{ matrix.rid }}
+            bin/ssms-patcher-${{ matrix.rid }}.sha256
+
+  publish:
+    name: publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: generate changelog
+        id: log
+        run: |
+          set -euo pipefail
+          prev=$(git tag --list 'v*' --sort=-v:refname | sed -n '2p')
+          if [ -n "$prev" ]; then
+            git log --pretty=format:'* %s (%h)' "$prev..${GITHUB_REF_NAME}" > CHANGELOG.txt
+          else
+            git log --pretty=format:'* %s (%h)' > CHANGELOG.txt
+          fi
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          cat CHANGELOG.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ssms-patcher-linux-x64
+            dist/ssms-patcher-linux-x64.sha256
+            dist/ssms-patcher-osx-x64
+            dist/ssms-patcher-osx-x64.sha256
+            dist/ssms-patcher-osx-arm64
+            dist/ssms-patcher-osx-arm64.sha256
+          body: |
+            ## Changes since previous tag
+
+            ${{ steps.log.outputs.changelog }}
+
+            ## Verify
+
+            ```
+            sha256sum -c ssms-patcher-<rid>.sha256
+            ```
